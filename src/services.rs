@@ -102,6 +102,7 @@ pub struct UpdateRequest {
     pub tag_ids: Option<Vec<u64>>,
     pub created: Option<String>,
     pub custom_fields: Option<Value>,
+    pub asn: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -322,6 +323,9 @@ pub fn update_document<T: Transport>(
     if let Some(custom_fields) = &request.custom_fields {
         patch.insert("custom_fields".to_string(), custom_fields.clone());
     }
+    if let Some(asn) = request.asn {
+        patch.insert("archive_serial_number".to_string(), json!(asn));
+    }
 
     if patch.is_empty() {
         return Err(AppError::NoFieldsToUpdate);
@@ -368,6 +372,55 @@ pub fn delete_document<T: Transport>(
     document_id: u64,
 ) -> Result<(), AppError> {
     client.delete(&format!("documents/{document_id}/"))
+}
+
+/// Splits a document into several new documents by page ranges, via the
+/// `documents/bulk_edit/` "split" method. `pages` is a comma-separated list
+/// of ranges/singles in Paperless-ngx's own syntax, e.g. "1-2,3,4-5" (one
+/// group per resulting document). Runs asynchronously server-side (queued
+/// as a consume task per split part) -- the new documents don't exist yet
+/// when this call returns "OK"; list documents again after a short wait to
+/// find them. Unless `delete_originals` is true (default false, and this
+/// CLI defaults to false too), the source document is left untouched, so
+/// this is safe to retry.
+pub fn split_document<T: Transport>(
+    client: &ApiClient<T>,
+    document_id: u64,
+    pages: &str,
+    delete_originals: bool,
+) -> Result<Value, AppError> {
+    client.post_json(
+        "documents/bulk_edit/",
+        json!({
+            "documents": [document_id],
+            "method": "split",
+            "parameters": {
+                "pages": pages,
+                "delete_originals": delete_originals,
+            },
+        }),
+    )
+}
+
+/// Merges several documents into one new document (page order follows
+/// `document_ids` order), via the same bulk_edit endpoint. Also
+/// asynchronous; also leaves the sources in place unless
+/// `delete_originals` is true.
+pub fn merge_documents<T: Transport>(
+    client: &ApiClient<T>,
+    document_ids: &[u64],
+    delete_originals: bool,
+) -> Result<Value, AppError> {
+    client.post_json(
+        "documents/bulk_edit/",
+        json!({
+            "documents": document_ids,
+            "method": "merge",
+            "parameters": {
+                "delete_originals": delete_originals,
+            },
+        }),
+    )
 }
 
 pub fn download_document<T: Transport>(

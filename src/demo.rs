@@ -129,6 +129,9 @@ fn dispatch_demo_request(
             "application/zip",
             Some("attachment; filename=\"paperless-demo-export.zip\"".to_string()),
         ),
+        (HttpMethod::Post, ["documents", "bulk_edit"]) => {
+            ok_json(normalized, json!({ "result": "OK", "demo": true }))
+        }
         _ => Err(AppError::Http {
             status: 404,
             url: demo_url(normalized),

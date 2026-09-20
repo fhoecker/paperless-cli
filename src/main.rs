@@ -17,10 +17,10 @@ use paperless_cli::services::{
     delete_document, delete_document_type, delete_tag, download_document, download_preview,
     download_thumbnail, edit_document, get_correspondent, get_document, get_document_content,
     get_document_type, get_tag, get_task, init_connection, list_correspondents,
-    list_document_types, list_documents, list_tags, list_tasks, operational_overview,
-    persist_session, ping, query_search, sanitize_filename, search_documents, status,
-    update_document, update_tag, upload_document, DocumentQuery, OutputEnvelope, TagUpdateRequest,
-    UpdateRequest, UploadRequest,
+    list_document_types, list_documents, list_tags, list_tasks, merge_documents,
+    operational_overview, persist_session, ping, query_search, sanitize_filename,
+    search_documents, split_document, status, update_document, update_tag, upload_document,
+    DocumentQuery, OutputEnvelope, TagUpdateRequest, UpdateRequest, UploadRequest,
 };
 use paperless_cli::tui::run_tui;
 use serde_json::json;
@@ -124,6 +124,8 @@ enum DocumentsCommand {
     Update(DocumentUpdateArgs),
     Delete(IdArgs),
     Search(DocumentSearchArgs),
+    Split(DocumentSplitArgs),
+    Merge(DocumentMergeArgs),
 }
 
 #[derive(Args, Debug)]
@@ -207,6 +209,9 @@ struct DocumentUpdateArgs {
     tag_ids: Vec<u64>,
     #[arg(long)]
     created: Option<String>,
+    /// Archive Serial Number -- the physical archive/filing number.
+    #[arg(long)]
+    asn: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -224,6 +229,34 @@ struct DocumentEditArgs {
     add_tags: Vec<String>,
     #[arg(long = "remove-tag")]
     remove_tags: Vec<String>,
+    /// Archive Serial Number -- the physical archive/filing number.
+    #[arg(long)]
+    asn: Option<u64>,
+}
+
+#[derive(Args, Debug)]
+struct DocumentSplitArgs {
+    id: u64,
+    /// Page groups, Paperless-ngx syntax: comma-separated ranges/singles,
+    /// one group per resulting document, e.g. "1-2,3,4-5".
+    #[arg(long)]
+    pages: String,
+    /// Delete the source document once the split documents are created.
+    /// Defaults to false: the source is left in place.
+    #[arg(long, default_value_t = false)]
+    delete_originals: bool,
+}
+
+#[derive(Args, Debug)]
+struct DocumentMergeArgs {
+    /// Document IDs to merge, in the order pages should appear. Repeat the
+    /// flag for each document, e.g. --id 301 --id 302.
+    #[arg(long = "id", required = true)]
+    ids: Vec<u64>,
+    /// Delete the source documents once the merged document is created.
+    /// Defaults to false: the sources are left in place.
+    #[arg(long, default_value_t = false)]
+    delete_originals: bool,
 }
 
 #[derive(Args, Debug)]
@@ -591,6 +624,7 @@ fn run_command(
                             tag_ids: None,
                             created: args.created,
                             custom_fields: None,
+                            asn: args.asn,
                         },
                         &args.add_tags,
                         &args.remove_tags,
@@ -614,6 +648,7 @@ fn run_command(
                             },
                             created: args.created,
                             custom_fields: None,
+                            asn: args.asn,
                         },
                     )?,
                     security: auditor.review_once(&audit_state(paths, Some(&config), None)),
@@ -640,6 +675,18 @@ fn run_command(
                         security: auditor.review_once(&audit_state(paths, Some(&config), None)),
                     }
                 }
+                DocumentsCommand::Split(args) => OutputEnvelope {
+                    mode: output_name(output).to_string(),
+                    command: "documents split".to_string(),
+                    data: split_document(&client, args.id, &args.pages, args.delete_originals)?,
+                    security: auditor.review_once(&audit_state(paths, Some(&config), None)),
+                },
+                DocumentsCommand::Merge(args) => OutputEnvelope {
+                    mode: output_name(output).to_string(),
+                    command: "documents merge".to_string(),
+                    data: merge_documents(&client, &args.ids, args.delete_originals)?,
+                    security: auditor.review_once(&audit_state(paths, Some(&config), None)),
+                },
             };
             session.push_history(envelope.command.clone());
             persist_session(paths, &session)?;
@@ -1041,6 +1088,7 @@ fn run_demo_command(
                         tag_ids: None,
                         created: args.created,
                         custom_fields: None,
+                        asn: args.asn,
                     },
                     &args.add_tags,
                     &args.remove_tags,
@@ -1064,6 +1112,7 @@ fn run_demo_command(
                         },
                         created: args.created,
                         custom_fields: None,
+                        asn: args.asn,
                     },
                 )?,
                 security: Vec::new(),
@@ -1086,6 +1135,18 @@ fn run_demo_command(
                     security: Vec::new(),
                 }
             }
+            DocumentsCommand::Split(args) => OutputEnvelope {
+                mode: output_name(output).to_string(),
+                command: "documents split".to_string(),
+                data: split_document(&client, args.id, &args.pages, args.delete_originals)?,
+                security: Vec::new(),
+            },
+            DocumentsCommand::Merge(args) => OutputEnvelope {
+                mode: output_name(output).to_string(),
+                command: "documents merge".to_string(),
+                data: merge_documents(&client, &args.ids, args.delete_originals)?,
+                security: Vec::new(),
+            },
         },
         RootCommand::Search(search_command) => match search_command {
             SearchCommand::Query(args) => OutputEnvelope {
